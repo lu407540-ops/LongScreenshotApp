@@ -96,7 +96,7 @@ public class ScreenshotService extends Service {
     public void onDestroy() {
         cleanup();
         if (bgThread != null) bgThread.quitSafely();
-        ProjectionHolder.clear();
+        ProjectionHolder.clear(this);
         super.onDestroy();
     }
 
@@ -111,9 +111,13 @@ public class ScreenshotService extends Service {
             return;
         }
 
-        if (ProjectionHolder.resultCode == -1 || ProjectionHolder.data == null) {
+        // 先从 SP/内存加载授权数据
+        ProjectionHolder.load(this);
+        Log.d(TAG, "ProjectionHolder loaded, ready=" + ProjectionHolder.isReady());
+
+        if (!ProjectionHolder.isReady()) {
             Log.e(TAG, "ProjectionHolder empty!");
-            updateNotif("授权数据缺失，请重新打开App");
+            updateNotif("授权数据缺失，请重新打开App授权");
             return;
         }
 
@@ -121,8 +125,9 @@ public class ScreenshotService extends Service {
             MediaProjectionManager mgr =
                     (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
             mediaProjection = mgr.getMediaProjection(
-                    ProjectionHolder.resultCode, ProjectionHolder.data);
-            ProjectionHolder.clear();
+                    ProjectionHolder.getResultCode(), ProjectionHolder.getData());
+            // 用完后清内存和 SP，防止下次误用旧数据
+            ProjectionHolder.clear(this);
 
             imageReader = ImageReader.newInstance(
                     screenWidth, screenHeight, PixelFormat.RGBA_8888, 2);

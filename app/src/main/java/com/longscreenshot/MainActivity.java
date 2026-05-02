@@ -50,7 +50,9 @@ public class MainActivity extends Activity {
         if (requestCode != REQUEST_CODE_SCREEN_CAPTURE) return;
 
         if (resultCode == Activity.RESULT_OK && data != null) {
-            ProjectionHolder.set(resultCode, data);
+            // 存到 SP + 内存，防止进程重启后丢失
+            ProjectionHolder.set(this, resultCode, data);
+            Log.d("MainActivity", "ProjectionHolder saved, resultCode=" + resultCode);
             tvStatus.setText("授权成功，正在启动...");
             btnAction.setEnabled(false);
 
