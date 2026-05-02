@@ -14,16 +14,14 @@ import androidx.core.content.ContextCompat;
 
 /**
  * 授权入口 Activity。
- * 授权成功后启动 ScreenshotService 和 FloatingWindowService，然后 self-finish。
+ * 授权成功后启动 ScreenshotService 和 FloatingWindowService，
+ * 然后 hide 到后台（不 finish），保持进程不被回收。
  */
 public class MainActivity extends Activity {
 
     private static final int REQUEST_CODE_SCREEN_CAPTURE = 1001;
     private TextView tvStatus;
     private Button btnAction;
-
-    // 用 static Handler 避免 Activity finish 后被 GC
-    private static final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -51,8 +49,8 @@ public class MainActivity extends Activity {
         if (requestCode != REQUEST_CODE_SCREEN_CAPTURE) return;
 
         if (resultCode == Activity.RESULT_OK && data != null) {
-            // 存到 SP + 内存，防止进程重启后丢失
-            ProjectionHolder.set(this, resultCode, data);
+            // 直接存到内存（同一进程，不走序列化）
+            ProjectionHolder.set(resultCode, data);
             Log.d("MainActivity", "ProjectionHolder saved, resultCode=" + resultCode);
             tvStatus.setText("授权成功，正在启动...");
             btnAction.setEnabled(false);
@@ -62,17 +60,22 @@ public class MainActivity extends Activity {
             ssIntent.setAction(ScreenshotService.ACTION_START);
             startForegroundService(ssIntent);
 
-            // 2. 等 1 秒后启动悬浮窗并关闭 Activity
-            //    用 static handler 确保 Activity finish 后任务仍执行
-            mainHandler.postDelayed(() -> {
-                Intent fwIntent = new Intent(getApplicationContext(), FloatingWindowService.class);
+            // 2. 等 1 秒后启动悬浮窗，然后 hide Activity（不 finish）
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                Intent fwIntent = new Intent(this, FloatingWindowService.class);
                 fwIntent.setAction(FloatingWindowService.ACTION_SHOW);
-                ContextCompat.startForegroundService(getApplicationContext(), fwIntent);
+                ContextCompat.startForegroundService(this, fwIntent);
 
-                mainHandler.postDelayed(() -> {
-                    // 确保在 Activity 线程 finish
-                    finish();
-                }, 500);
+                // 不 finish，只 hide，保持进程不被回收
+                moveTaskToBack(true);
+                tvStatus.setText("已在后台运行，请使用悬浮窗操作");
+                btnAction.setText("回到前台");
+                btnAction.setEnabled(true);
+                btnAction.setOnClickListener(v -> {
+                    Intent i = new Intent(this, MainActivity.class);
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                    startActivity(i);
+                });
             }, 1000);
 
         } else {
