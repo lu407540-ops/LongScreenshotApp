@@ -1,0 +1,5 @@
+# 强制gradlew使用LF换行符（Ubuntu构建必须）
+gradlew text eol=lf
+
+# 其他shell脚本也使用LF
+*.sh text eol=lf
