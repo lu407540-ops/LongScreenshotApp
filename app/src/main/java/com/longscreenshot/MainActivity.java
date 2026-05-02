@@ -19,8 +19,8 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        tvStatus  = findViewById(R.id.tv_status);
-        btnAction = findViewById(R.id.btn_action);
+        tvStatus  = findViewById(R.id.tvPermStatus);
+        btnAction = findViewById(R.id.btnStart);
 
         btnAction.setOnClickListener(v -> requestPermission());
 
