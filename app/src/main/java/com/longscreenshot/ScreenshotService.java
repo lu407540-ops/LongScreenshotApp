@@ -4,15 +4,9 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
-import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
-import android.graphics.Bitmap.CompressFormat;
-import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.PixelFormat;
-import android.hardware.display.DisplayManager;
-import android.hardware.display.VirtualDisplay;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.projection.MediaProjection;
@@ -23,340 +17,340 @@ import android.os.HandlerThread;
 import android.os.IBinder;
 import android.util.DisplayMetrics;
 import android.util.Log;
-import android.view.WindowManager;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.List;
+import android.graphics.Bitmap.CompressFormat;
 
 public class ScreenshotService extends Service {
 
-    private static final String TAG = "ScreenshotSvc";
-    public static final String ACTION_START   = "ACTION_START";
-    public static final String ACTION_STOP    = "ACTION_STOP";
+    public static final String ACTION_START = "ACTION_START";
+    public static final String ACTION_STOP = "ACTION_STOP";
     public static final String ACTION_CAPTURE = "ACTION_CAPTURE";
+    public static final String EXTRA_RESULT_CODE = "EXTRA_RESULT_CODE";
+    public static final String EXTRA_DATA = "EXTRA_DATA";
 
-    private static final String CHANNEL_ID = "screenshot_channel";
-    private static final int NOTIFY_ID = 1002;
+    private static final String TAG = "ScreenshotService";
 
     private MediaProjection mediaProjection;
     private ImageReader imageReader;
-    private VirtualDisplay virtualDisplay;
-    private Handler bgHandler;
-    private HandlerThread bgThread;
+    private WindowManager windowManager;
+    private Handler handler;
+    private HandlerThread handlerThread;
 
-    private int screenWidth, screenHeight, screenDensity;
-    private final List<Bitmap> frames = new ArrayList<>();
-    private volatile boolean isProjectionReady = false;
+    private int screenWidth;
+    private int screenHeight;
+    private int screenDensity;
 
-    // 去重参数
-    private static final int MATCH_THRESHOLD = 30;
-    private static final float OVERLAP_SEARCH_RATIO = 0.5f;
-    private static final int SEARCH_STEP = 2;
+    private Bitmap longScreenshotBitmap;
+    private Canvas canvas;
+    private int currentHeight = 0;
 
-    // ===================== 生命周期 =====================
+    private boolean isCapturing = false;
+    private boolean isFirstCapture = true;
+
+    private static final String CHANNEL_ID = "screenshot_channel";
+    private static final int NOTIFY_ID = 1;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        createChannel();
 
-        bgThread = new HandlerThread("ScreenshotBg");
-        bgThread.start();
-        bgHandler = new Handler(bgThread.getLooper());
+        // 创建通知渠道（Android 8.0+ 必须）
+        createNotificationChannel();
 
-        readScreenSize();
-        Log.d(TAG, "onCreate | screen=" + screenWidth + "x" + screenHeight);
+        // 立即设为前台服务，必须在 onCreate 完成前调用
+        startForeground(NOTIFY_ID, buildNotification("长截图服务", "正在准备..."));
+
+        windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+
+        // 获取屏幕尺寸
+        DisplayMetrics metrics = new DisplayMetrics();
+        windowManager.getDefaultDisplay().getRealMetrics(metrics);
+        screenWidth = metrics.widthPixels;
+        screenHeight = metrics.heightPixels;
+        screenDensity = metrics.densityDpi;
+
+        // 初始化HandlerThread
+        handlerThread = new HandlerThread("ScreenshotThread");
+        handlerThread.start();
+        handler = new Handler(handlerThread.getLooper());
     }
 
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        // Android 12+：每次 startForegroundService 后必须尽快 startForeground
-        startForeground(NOTIFY_ID, buildNotif("正在运行..."));
-
-        if (intent == null) return START_STICKY;
-
-        String action = intent.getAction();
-        Log.d(TAG, "onStartCommand action=" + action + " ready=" + isProjectionReady);
-
-        if (ACTION_START.equals(action)) {
-            initProjection();
-        } else if (ACTION_CAPTURE.equals(action)) {
-            captureFrame();
-        } else if (ACTION_STOP.equals(action)) {
-            stopAndSave();
-        }
-        return START_STICKY;
-    }
-
-    @Override
-    public void onDestroy() {
-        cleanup();
-        if (bgThread != null) bgThread.quitSafely();
-        ProjectionHolder.clear();
-        super.onDestroy();
-    }
-
-    @Nullable @Override
-    public IBinder onBind(Intent intent) { return null; }
-
-    // ===================== 初始化 MediaProjection =====================
-
-    private void initProjection() {
-        if (isProjectionReady) {
-            Log.d(TAG, "Already ready, skip");
-            return;
-        }
-
-        Log.d(TAG, "ProjectionHolder ready=" + ProjectionHolder.isReady());
-
-        if (ProjectionHolder.getResultCode() == -1 || ProjectionHolder.getData() == null) {
-            Log.e(TAG, "ProjectionHolder empty!");
-            updateNotif("授权数据缺失，请重新打开App授权");
-            return;
-        }
-
-        try {
-            MediaProjectionManager mgr =
-                    (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-            mediaProjection = mgr.getMediaProjection(
-                    ProjectionHolder.getResultCode(), ProjectionHolder.getData());
-            // 用完后清内存，防止下次误用旧数据
-            ProjectionHolder.clear();
-
-            imageReader = ImageReader.newInstance(
-                    screenWidth, screenHeight, PixelFormat.RGBA_8888, 2);
-
-            virtualDisplay = mediaProjection.createVirtualDisplay(
-                    "LongScreenshot",
-                    screenWidth, screenHeight, screenDensity,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION,
-                    imageReader.getSurface(), null, bgHandler);
-
-            isProjectionReady = true;
-            frames.clear();
-            updateNotif("就绪 - 滚动页面后点悬浮窗截取");
-            Log.d(TAG, "Projection READY");
-        } catch (Exception e) {
-            Log.e(TAG, "initProjection failed", e);
-            updateNotif("启动失败: " + e.getMessage());
-        }
-    }
-
-    // ===================== 截取 =====================
-
-    private void captureFrame() {
-        if (!isProjectionReady || imageReader == null) {
-            Log.w(TAG, "capture: not ready");
-            updateNotif("服务未就绪，请重新打开App授权");
-            return;
-        }
-
-        bgHandler.postDelayed(() -> {
-            try {
-                Image image = imageReader.acquireLatestImage();
-                if (image == null) {
-                    Log.w(TAG, "No image");
-                    updateNotif("未获取到画面，请稍后重试");
-                    return;
-                }
-
-                Bitmap bmp = imageToBitmap(image);
-                image.close();
-
-                if (bmp != null) {
-                    frames.add(bmp);
-                    String msg = "已截 " + frames.size() + " 帧";
-                    Log.d(TAG, msg);
-                    updateNotif(msg);
-                    notifyFloatingWindow();
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "captureFrame err", e);
-            }
-        }, 300);
-    }
-
-    private Bitmap imageToBitmap(Image image) {
-        try {
-            Image.Plane[] planes = image.getPlanes();
-            ByteBuffer buf = planes[0].getBuffer();
-            int ps = planes[0].getPixelStride();
-            int rs = planes[0].getRowStride();
-            int pad = (rs - ps * screenWidth) / ps;
-
-            Bitmap src = Bitmap.createBitmap(
-                    screenWidth + pad, screenHeight, Bitmap.Config.ARGB_8888);
-            src.copyPixelsFromBuffer(buf);
-            return Bitmap.createBitmap(src, 0, 0, screenWidth, screenHeight);
-        } catch (Exception e) {
-            Log.e(TAG, "imageToBitmap err", e);
-            return null;
-        }
-    }
-
-    // ===================== 保存 =====================
-
-    private void stopAndSave() {
-        if (frames.isEmpty()) {
-            updateNotif("没有截取任何帧");
-            return;
-        }
-
-        isProjectionReady = false;
-        updateNotif("正在拼接保存...");
-
-        bgHandler.postDelayed(() -> {
-            try {
-                Bitmap result = stitchFrames();
-                String path = saveBitmap(result);
-                if (path != null) {
-                    updateNotif("已保存到: " + path);
-                    Log.d(TAG, "Saved: " + path);
-                } else {
-                    updateNotif("保存失败");
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "save err", e);
-                updateNotif("保存出错: " + e.getMessage());
-            }
-
-            // 通知悬浮窗关闭（用 sendBroadcast 不依赖 Context 引用）
-            sendBroadcast(new Intent(FloatingWindowService.ACTION_HIDE));
-
-            // 清理资源
-            cleanup();
-            stopSelf();
-        }, 500);
-    }
-
-    // ===================== 帧拼接 =====================
-
-    private Bitmap stitchFrames() {
-        if (frames.isEmpty()) return null;
-        if (frames.size() == 1) return frames.get(0);
-
-        int totalH = 0;
-        List<Bitmap> uniq = new ArrayList<>();
-        Bitmap prev = frames.get(0);
-        uniq.add(prev);
-        totalH += prev.getHeight();
-
-        for (int i = 1; i < frames.size(); i++) {
-            Bitmap cur = frames.get(i);
-            int ov = findOverlap(prev, cur);
-            if (ov > 0) {
-                Bitmap crop = Bitmap.createBitmap(cur, 0, ov, cur.getWidth(), cur.getHeight() - ov);
-                uniq.add(crop);
-                totalH += crop.getHeight();
-            } else {
-                uniq.add(cur);
-                totalH += cur.getHeight();
-            }
-            prev = cur;
-        }
-
-        Bitmap out = Bitmap.createBitmap(screenWidth, totalH, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(out);
-        int y = 0;
-        for (Bitmap b : uniq) { c.drawBitmap(b, 0, y, null); y += b.getHeight(); }
-        Log.d(TAG, "Stitched " + frames.size() + " -> " + screenWidth + "x" + totalH);
-        return out;
-    }
-
-    private int findOverlap(Bitmap prev, Bitmap cur) {
-        int w = prev.getWidth(), pH = prev.getHeight();
-        int start = (int)(pH * OVERLAP_SEARCH_RATIO);
-        for (int off = start; off < pH - 10; off += SEARCH_STEP) {
-            int ok = 0, rows = Math.min(5, pH - off);
-            for (int r = 0; r < rows; r++) {
-                int py = pH - off + r, cy = r;
-                if (py >= pH || cy >= cur.getHeight()) break;
-                if (isRowSimilar(prev, cur, py, cy, w)) ok++;
-            }
-            if (ok >= rows * 0.8) return off;
-        }
-        return 0;
-    }
-
-    private boolean isRowSimilar(Bitmap a, Bitmap b, int y1, int y2, int w) {
-        int step = Math.max(1, w / 50), ok = 0;
-        for (int x = 0; x < w; x += step) {
-            int c1 = a.getPixel(x, y1), c2 = b.getPixel(x, y2);
-            if (Math.abs(Color.red(c1)-Color.red(c2))
-              + Math.abs(Color.green(c1)-Color.green(c2))
-              + Math.abs(Color.blue(c1)-Color.blue(c2)) < MATCH_THRESHOLD) ok++;
-        }
-        return ok > (w / step) * 0.7;
-    }
-
-    private String saveBitmap(Bitmap bmp) {
-        if (bmp == null) return null;
-        try {
-            File dir = new File(getExternalFilesDir(null), "LongScreenshot");
-            if (!dir.exists()) dir.mkdirs();
-            File f = new File(dir, "screenshot_" + System.currentTimeMillis() + ".png");
-            FileOutputStream fos = new FileOutputStream(f);
-            bmp.compress(CompressFormat.PNG, 100, fos);
-            fos.flush(); fos.close();
-            return f.getAbsolutePath();
-        } catch (Exception e) { Log.e(TAG, "save err", e); return null; }
-    }
-
-    // ===================== 通知 =====================
-
-    private void readScreenSize() {
-        WindowManager wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
-        DisplayMetrics m = new DisplayMetrics();
-        wm.getDefaultDisplay().getRealMetrics(m);
-        screenWidth = m.widthPixels;
-        screenHeight = m.heightPixels;
-        screenDensity = m.densityDpi;
-    }
-
-    private void createChannel() {
+    private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel ch = new NotificationChannel(
-                    CHANNEL_ID, "截图服务", NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription("长截图后台运行");
+            NotificationChannel channel = new NotificationChannel(
+                    CHANNEL_ID, "长截图服务", NotificationManager.IMPORTANCE_LOW);
+            channel.setDescription("长截图后台运行通知");
             NotificationManager nm = getSystemService(NotificationManager.class);
-            if (nm != null) nm.createNotificationChannel(ch);
+            if (nm != null) nm.createNotificationChannel(channel);
         }
     }
 
-    private Notification buildNotif(String text) {
+    private Notification buildNotification(String title, String text) {
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("长截图")
+                .setContentTitle(title)
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.ic_menu_camera)
                 .setOngoing(true)
                 .build();
     }
 
-    private void updateNotif(String text) {
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (nm != null) nm.notify(NOTIFY_ID, buildNotif(text));
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent == null) return START_STICKY;
+
+        String action = intent.getAction();
+        if (ACTION_START.equals(action)) {
+            startCapture(intent);
+        } else if (ACTION_STOP.equals(action)) {
+            stopCapture();
+        } else if (ACTION_CAPTURE.equals(action)) {
+            captureOnce();
+        }
+
+        return START_STICKY;
     }
 
-    private void notifyFloatingWindow() {
-        int h = 0; for (Bitmap f : frames) h += f.getHeight();
-        Intent i = new Intent(FloatingWindowService.ACTION_UPDATE);
-        i.putExtra("height", h);
-        i.putExtra("frames", frames.size());
-        sendBroadcast(i);
+    private void startCapture(Intent intent) {
+        // 注意：RESULT_OK == -1，默认值用 Integer.MIN_VALUE 避免冲突
+        int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Integer.MIN_VALUE);
+        Intent data = intent.getParcelableExtra(EXTRA_DATA);
+
+        if (resultCode == Integer.MIN_VALUE || data == null) {
+            Log.e(TAG, "startCapture: 无效的 resultCode 或 data 为空");
+            return;
+        }
+
+        // 创建MediaProjection
+        MediaProjectionManager manager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+        mediaProjection = manager.getMediaProjection(resultCode, data);
+
+        // 创建ImageReader
+        imageReader = ImageReader.newInstance(screenWidth, screenHeight,
+                PixelFormat.RGBA_8888, 2);
+
+        // 创建长截图Bitmap（动态高度，初始为屏幕高度）
+        longScreenshotBitmap = Bitmap.createBitmap(screenWidth, screenHeight * 10, Bitmap.Config.ARGB_8888);
+        canvas = new Canvas(longScreenshotBitmap);
+        currentHeight = 0;
+        isFirstCapture = true;
+        isCapturing = true;
+
+        // 开始定时截图
+        handler.postDelayed(this::captureAndStitch, 500);
+
+        Log.d(TAG, "Screenshot started");
     }
 
-    // ===================== 清理 =====================
+    private void captureOnce() {
+        if (mediaProjection == null || imageReader == null || !isCapturing) return;
 
-    private void cleanup() {
-        isProjectionReady = false;
-        if (virtualDisplay != null) { virtualDisplay.release(); virtualDisplay = null; }
-        if (imageReader != null) { imageReader.close(); imageReader = null; }
-        if (mediaProjection != null) { mediaProjection.stop(); mediaProjection = null; }
-        for (Bitmap f : frames) { if (!f.isRecycled()) f.recycle(); }
-        frames.clear();
+        // 创建虚拟显示器
+        android.hardware.display.VirtualDisplay virtualDisplay = mediaProjection.createVirtualDisplay(
+                "Screenshot",
+                screenWidth, screenHeight, screenDensity,
+                android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                imageReader.getSurface(), null, null);
+
+        // 等待截图完成
+        handler.postDelayed(() -> {
+            Image image = imageReader.acquireLatestImage();
+            if (image != null) {
+                processImage(image);
+                image.close();
+            }
+            virtualDisplay.release();
+        }, 100);
+    }
+
+    private void captureAndStitch() {
+        if (!isCapturing || mediaProjection == null) return;
+
+        android.hardware.display.VirtualDisplay virtualDisplay = mediaProjection.createVirtualDisplay(
+                "Screenshot",
+                screenWidth, screenHeight, screenDensity,
+                android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                imageReader.getSurface(), null, null);
+
+        handler.postDelayed(() -> {
+            Image image = imageReader.acquireLatestImage();
+            if (image != null) {
+                Bitmap bitmap = imageToBitmap(image);
+
+                if (bitmap != null) {
+                    // 拼接图片
+                    if (isFirstCapture) {
+                        // 第一次，直接绘制
+                        canvas.drawBitmap(bitmap, 0, 0, null);
+                        currentHeight = bitmap.getHeight();
+                        isFirstCapture = false;
+                    } else {
+                        // 后续，拼接到底部
+                        canvas.drawBitmap(bitmap, 0, currentHeight, null);
+                        currentHeight += bitmap.getHeight();
+
+                        // 如果超过预分配高度，扩展Bitmap
+                        if (currentHeight > longScreenshotBitmap.getHeight() - screenHeight) {
+                            expandBitmap();
+                        }
+                    }
+
+                    // 发送广播更新悬浮窗
+                    updateFloatingWindow();
+
+                    bitmap.recycle();
+                }
+
+                image.close();
+            }
+            virtualDisplay.release();
+
+            // 继续下一次截图
+            if (isCapturing) {
+                handler.postDelayed(this::captureAndStitch, 800);
+            }
+        }, 150);
+    }
+
+    private void processImage(Image image) {
+        Bitmap bitmap = imageToBitmap(image);
+        if (bitmap != null) {
+            if (isFirstCapture) {
+                canvas.drawBitmap(bitmap, 0, 0, null);
+                currentHeight = bitmap.getHeight();
+                isFirstCapture = false;
+            } else {
+                canvas.drawBitmap(bitmap, 0, currentHeight, null);
+                currentHeight += bitmap.getHeight();
+                if (currentHeight > longScreenshotBitmap.getHeight() - screenHeight) {
+                    expandBitmap();
+                }
+            }
+            updateFloatingWindow();
+            bitmap.recycle();
+        }
+    }
+
+    private Bitmap imageToBitmap(Image image) {
+        Image.Plane[] planes = image.getPlanes();
+        ByteBuffer buffer = planes[0].getBuffer();
+        int pixelStride = planes[0].getPixelStride();
+        int rowStride = planes[0].getRowStride();
+        int rowPadding = rowStride - pixelStride * screenWidth;
+
+        Bitmap bitmap = Bitmap.createBitmap(screenWidth + rowPadding / pixelStride,
+                screenHeight, Bitmap.Config.ARGB_8888);
+        bitmap.copyPixelsFromBuffer(buffer);
+
+        // 裁剪掉padding
+        if (rowPadding != 0) {
+            Bitmap cropped = Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight);
+            bitmap.recycle();
+            return cropped;
+        }
+
+        return bitmap;
+    }
+
+    private void expandBitmap() {
+        Bitmap newBitmap = Bitmap.createBitmap(screenWidth,
+                longScreenshotBitmap.getHeight() + screenHeight * 10,
+                Bitmap.Config.ARGB_8888);
+        Canvas newCanvas = new Canvas(newBitmap);
+        newCanvas.drawBitmap(longScreenshotBitmap, 0, 0, null);
+        longScreenshotBitmap.recycle();
+        longScreenshotBitmap = newBitmap;
+        canvas = new Canvas(longScreenshotBitmap);
+    }
+
+    private void updateFloatingWindow() {
+        // 计算文件大小估算
+        int estimatedSize = estimateFileSize();
+
+        // 发送广播给悬浮窗服务
+        Intent intent = new Intent(FloatingWindowService.ACTION_UPDATE);
+        intent.putExtra("width", screenWidth);
+        intent.putExtra("height", currentHeight);
+        intent.putExtra("size", estimatedSize);
+        sendBroadcast(new Intent(intent));
+    }
+
+    private int estimateFileSize() {
+        // 估算PNG文件大小（KB）
+        long pixels = (long) screenWidth * currentHeight;
+        long bytes = pixels * 4; // ARGB_8888 = 4 bytes per pixel
+        // PNG压缩率约50%
+        long compressedBytes = bytes / 2;
+        return (int) (compressedBytes / 1024); // 转换为KB
+    }
+
+    private void stopCapture() {
+        isCapturing = false;
+
+        // 保存最终截图
+        saveScreenshot();
+
+        // 清理
+        if (mediaProjection != null) {
+            mediaProjection.stop();
+            mediaProjection = null;
+        }
+        if (imageReader != null) {
+            imageReader.close();
+            imageReader = null;
+        }
+
+        // 隐藏悬浮窗
+        Intent intent = new Intent(this, FloatingWindowService.class);
+        intent.setAction(FloatingWindowService.ACTION_HIDE);
+        startService(intent);
+
+        Log.d(TAG, "Screenshot stopped");
+    }
+
+    private void saveScreenshot() {
+        if (longScreenshotBitmap == null || currentHeight == 0) return;
+
+        // 裁剪有效区域
+        Bitmap finalBitmap = Bitmap.createBitmap(longScreenshotBitmap, 0, 0, screenWidth, currentHeight);
+
+        // 保存到DCIM目录
+        File dir = new File(android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DCIM), "LongScreenshot");
+        if (!dir.exists()) dir.mkdirs();
+
+        String fileName = "long_screenshot_" + System.currentTimeMillis() + ".png";
+        File file = new File(dir, fileName);
+
+        try {
+            FileOutputStream fos = new FileOutputStream(file);
+            finalBitmap.compress(CompressFormat.PNG, 100, fos);
+            fos.flush();
+            fos.close();
+
+            Log.d(TAG, "Screenshot saved: " + file.getAbsolutePath());
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to save screenshot", e);
+        }
+
+        finalBitmap.recycle();
+    }
+
+    @Nullable
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+
+    @Override
+    public void onDestroy() {
+        stopCapture();
+        if (handlerThread != null) {
+            handlerThread.quitSafely();
+        }
+        super.onDestroy();
     }
 }
