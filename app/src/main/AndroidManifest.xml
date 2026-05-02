@@ -2,11 +2,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.longscreenshot">
 
-    <!-- 屏幕截图权限 -->
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <!-- 权限声明 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACTION_MANAGE_OVERLAY_PERMISSION" />
 
     <application
@@ -14,9 +19,10 @@
         android:icon="@mipmap/ic_launcher"
         android:label="长截图工具"
         android:theme="@style/Theme.AppCompat.Light.NoActionBar"
-        android:supportsRtl="true">
+        android:supportsRtl="true"
+        android:requestLegacyExternalStorage="true">
 
-        <!-- 主界面 -->
+        <!-- 主界面：权限请求 + 录屏授权 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -27,7 +33,7 @@
             </intent-filter>
         </activity>
 
-        <!-- 截图服务 (MediaProjection) -->
+        <!-- 截图服务 (MediaProjection 前台服务) -->
         <service
             android:name=".ScreenshotService"
             android:exported="false"
@@ -36,7 +42,8 @@
         <!-- 悬浮窗服务 -->
         <service
             android:name=".FloatingWindowService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
 
     </application>
 

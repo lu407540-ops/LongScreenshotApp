@@ -15,9 +15,17 @@
         android:textSize="28sp"
         android:textStyle="bold"
         android:textColor="#333333"
+        android:layout_marginBottom="8dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="手动滚动 + 悬浮窗控制"
+        android:textSize="14sp"
+        android:textColor="#999999"
         android:layout_marginBottom="40dp"/>
 
-    <!-- 状态显示卡片 -->
+    <!-- 权限状态 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -29,99 +37,41 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="当前状态"
+            android:text="权限状态"
             android:textSize="16sp"
-            android:textColor="#666666"
-            android:layout_marginBottom="8dp"/>
-
-        <TextView
-            android:id="@+id/tvStatus"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="未启动"
-            android:textSize="20sp"
             android:textStyle="bold"
-            android:textColor="#FF5722"/>
-    </LinearLayout>
-
-    <!-- 截图信息预览 -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:background="@drawable/card_bg"
-        android:padding="20dp"
-        android:layout_marginBottom="30dp"
-        android:visibility="gone"
-        android:id="@+id/layoutInfo">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="截图信息"
-            android:textSize="16sp"
-            android:textColor="#666666"
+            android:textColor="#333333"
             android:layout_marginBottom="12dp"/>
 
         <TextView
-            android:id="@+id/tvWidth"
-            android:layout_width="wrap_content"
+            android:id="@+id/tvPermStatus"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="宽度: -- px"
+            android:text="正在检查..."
             android:textSize="14sp"
-            android:textColor="#333333"
-            android:layout_marginBottom="4dp"/>
-
-        <TextView
-            android:id="@+id/tvHeight"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="高度: -- px"
-            android:textSize="14sp"
-            android:textColor="#333333"
-            android:layout_marginBottom="4dp"/>
-
-        <TextView
-            android:id="@+id/tvSize"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="大小: -- KB"
-            android:textSize="14sp"
-            android:textColor="#333333"/>
+            android:textColor="#666666"
+            android:lineSpacingExtra="4dp"/>
     </LinearLayout>
 
-    <!-- 开始截图按钮 -->
+    <!-- 开始按钮 -->
     <Button
         android:id="@+id/btnStart"
         android:layout_width="match_parent"
         android:layout_height="56dp"
-        android:text="开始长截图"
+        android:text="授权并启动长截图"
         android:textSize="18sp"
         android:textAllCaps="false"
         android:backgroundTint="#4CAF50"
         android:textColor="#FFFFFF"
-        android:layout_marginBottom="16dp"/>
+        android:layout_marginBottom="30dp"/>
 
-    <!-- 停止截图按钮 -->
-    <Button
-        android:id="@+id/btnStop"
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:text="停止并保存"
-        android:textSize="18sp"
-        android:textAllCaps="false"
-        android:backgroundTint="#F44336"
-        android:textColor="#FFFFFF"
-        android:enabled="false"/>
-
-    <!-- 提示文字 -->
+    <!-- 使用说明 -->
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="使用方法：\n1. 点击「开始长截图」\n2. 选择要截取的内容区域\n3. 滚动屏幕，悬浮窗实时显示高度\n4. 点击「停止并保存」完成截图"
+        android:text="使用方法：\n1. 确保所有权限已授予\n2. 点击「授权并启动长截图」\n3. 同意录屏授权\n4. 切到要截取的目标App\n5. 点悬浮窗「▶ 开始」\n6. 手动滚动，每次滚动后点「截取」\n7. 完成后点「保存」"
         android:textSize="13sp"
         android:textColor="#999999"
-        android:layout_marginTop="30dp"
         android:lineSpacingExtra="4dp"/>
 
 </LinearLayout>
