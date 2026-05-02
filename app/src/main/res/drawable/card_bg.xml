@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 卡片背景：白色圆角阴影效果 -->
+    <solid android:color="#FFFFFF" />
+    <corners android:radius="12dp" />
+    <padding android:left="16dp" android:top="16dp" android:right="16dp" android:bottom="16dp" />
+    <!-- 阴影效果（API 21+） -->
+</shape>
