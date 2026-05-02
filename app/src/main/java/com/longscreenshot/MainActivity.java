@@ -9,6 +9,7 @@ import android.os.Looper;
 import android.widget.Button;
 import android.widget.TextView;
 import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
 
 /**
  * 授权入口 Activity。
@@ -63,7 +64,7 @@ public class MainActivity extends Activity {
             mainHandler.postDelayed(() -> {
                 Intent fwIntent = new Intent(getApplicationContext(), FloatingWindowService.class);
                 fwIntent.setAction(FloatingWindowService.ACTION_SHOW);
-                startService(fwIntent);
+                ContextCompat.startForegroundService(getApplicationContext(), fwIntent);
 
                 mainHandler.postDelayed(() -> {
                     // 确保在 Activity 线程 finish

@@ -40,14 +40,42 @@ public class FloatingWindowService extends Service {
     private BroadcastReceiver updateReceiver;
     private BroadcastReceiver hideReceiver;
 
+    private static final String CHANNEL_ID = "floating_channel";
+    private static final int NOTIFY_ID = 1003;
+
     @Override
     public void onCreate() {
         super.onCreate();
         wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+        createChannel();
+        startForeground(NOTIFY_ID, buildNotif("长截图悬浮窗运行中..."));
+        Log.d(TAG, "onCreate: 悬浮窗服务已创建并设为前台");
+    }
+
+    private void createChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            android.app.NotificationChannel ch = new android.app.NotificationChannel(
+                    CHANNEL_ID, "悬浮窗服务", android.app.NotificationManager.IMPORTANCE_LOW);
+            ch.setDescription("长截图悬浮窗");
+            android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
+            if (nm != null) nm.createNotificationChannel(ch);
+        }
+    }
+
+    private android.app.Notification buildNotif(String text) {
+        return new androidx.core.app.NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("长截图悬浮窗")
+                .setContentText(text)
+                .setSmallIcon(android.R.drawable.ic_menu_camera)
+                .setOngoing(true)
+                .build();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // 每次 onStartCommand 都必须确保前台通知存在（Android 12+ 要求）
+        startForeground(NOTIFY_ID, buildNotif("长截图悬浮窗运行中..."));
+
         if (intent == null) return START_STICKY;
         String action = intent.getAction();
         Log.d(TAG, "onStartCommand: " + action);
