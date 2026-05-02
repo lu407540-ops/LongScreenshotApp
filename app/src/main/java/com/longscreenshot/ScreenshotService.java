@@ -10,7 +10,6 @@ import android.graphics.Bitmap;
 import android.graphics.Bitmap.CompressFormat;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
@@ -51,7 +50,7 @@ public class ScreenshotService extends Service {
 
     private int screenWidth, screenHeight, screenDensity;
     private List<Bitmap> frames = new ArrayList<>();
-    private boolean isRunning = false;
+    private boolean isProjectionReady = false;
 
     // 去重参数
     private static final int MATCH_THRESHOLD = 30;
@@ -62,8 +61,6 @@ public class ScreenshotService extends Service {
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
-
-        // 立即启动前台通知，满足 Android 8.0 5秒限制
         startForeground(NOTIFICATION_ID, buildNotification("正在准备..."));
 
         handlerThread = new HandlerThread("ScreenshotThread");
@@ -84,26 +81,29 @@ public class ScreenshotService extends Service {
         if (intent == null) return START_STICKY;
 
         String action = intent.getAction();
-        Log.d(TAG, "onStartCommand: " + action);
+        Log.d(TAG, "onStartCommand: " + action + " | projectionReady=" + isProjectionReady);
 
         if (ACTION_START.equals(action)) {
-            startProjection();
+            initProjection();
         } else if (ACTION_CAPTURE.equals(action)) {
             captureFrame();
         } else if (ACTION_STOP.equals(action)) {
-            stopProjectionAndSave();
+            stopAndSave();
         }
         return START_STICKY;
     }
 
-    // ===================== 启动 / 停止 =====================
+    // ===================== 初始化 MediaProjection =====================
 
-    private void startProjection() {
-        if (isRunning) return;
+    private void initProjection() {
+        if (isProjectionReady) {
+            Log.d(TAG, "Projection already ready");
+            return;
+        }
 
-        // 从 ProjectionHolder 读取授权数据
         if (ProjectionHolder.resultCode == -1 || ProjectionHolder.data == null) {
-            Log.e(TAG, "No valid permission data in ProjectionHolder");
+            Log.e(TAG, "No valid permission data in ProjectionHolder!");
+            updateNotification("授权数据缺失，请重新打开App授权");
             return;
         }
 
@@ -113,7 +113,7 @@ public class ScreenshotService extends Service {
             mediaProjection = manager.getMediaProjection(
                     ProjectionHolder.resultCode, ProjectionHolder.data);
 
-            // 用完后清空静态数据，避免内存泄漏
+            // 创建完成后清空静态数据
             ProjectionHolder.clear();
 
             imageReader = ImageReader.newInstance(
@@ -125,57 +125,47 @@ public class ScreenshotService extends Service {
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     imageReader.getSurface(), null, handler);
 
-            isRunning = true;
+            isProjectionReady = true;
             frames.clear();
-            updateNotification("长截图运行中，点击悬浮窗截图");
-            Log.d(TAG, "Projection started");
+            updateNotification("长截图已就绪，滚动页面后点击截取");
+            Log.d(TAG, "Projection READY");
         } catch (Exception e) {
-            Log.e(TAG, "Failed to start projection", e);
+            Log.e(TAG, "initProjection failed", e);
             updateNotification("启动失败：" + e.getMessage());
         }
-    }
-
-    private void stopProjectionAndSave() {
-        Log.d(TAG, "Stopping and saving...");
-        isRunning = false;
-        handler.postDelayed(() -> {
-            Bitmap result = stitchFrames();
-            String path = saveBitmap(result);
-            Log.d(TAG, "Saved to: " + path);
-            stopSelf();
-        }, 500);
-    }
-
-    @Override
-    public void onDestroy() {
-        cleanup();
-        if (handlerThread != null) handlerThread.quitSafely();
-        ProjectionHolder.clear();
-        super.onDestroy();
     }
 
     // ===================== 截取单帧 =====================
 
     private void captureFrame() {
-        if (!isRunning || imageReader == null) {
-            Log.w(TAG, "Not ready to capture");
+        if (!isProjectionReady || imageReader == null) {
+            Log.w(TAG, "captureFrame: projection not ready");
+            updateNotification("截图服务未就绪，请重新打开App");
             return;
         }
+
         handler.postDelayed(() -> {
-            Image image = imageReader.acquireLatestImage();
-            if (image == null) {
-                Log.w(TAG, "No image available");
-                return;
+            try {
+                Image image = imageReader.acquireLatestImage();
+                if (image == null) {
+                    Log.w(TAG, "No image available");
+                    updateNotification("未获取到画面，请稍后再试");
+                    return;
+                }
+                Bitmap bitmap = imageToBitmap(image);
+                image.close();
+
+                if (bitmap != null) {
+                    frames.add(bitmap);
+                    String msg = "已截取 " + frames.size() + " 帧";
+                    Log.d(TAG, msg);
+                    updateNotification(msg);
+                    notifyFloatingWindow();
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "captureFrame error", e);
             }
-            Bitmap bitmap = imageToBitmap(image);
-            image.close();
-            if (bitmap != null) {
-                frames.add(bitmap);
-                Log.d(TAG, "Frame captured: #" + frames.size()
-                        + " (" + bitmap.getWidth() + "x" + bitmap.getHeight() + ")");
-                updateFloatingWindow();
-            }
-        }, 100);
+        }, 200);
     }
 
     private Bitmap imageToBitmap(Image image) {
@@ -195,6 +185,36 @@ public class ScreenshotService extends Service {
             Log.e(TAG, "imageToBitmap failed", e);
             return null;
         }
+    }
+
+    // ===================== 保存 =====================
+
+    private void stopAndSave() {
+        if (frames.isEmpty()) {
+            updateNotification("没有截取任何帧");
+            stopSelf();
+            return;
+        }
+
+        isProjectionReady = false;
+        updateNotification("正在拼接保存...");
+
+        handler.postDelayed(() -> {
+            Bitmap result = stitchFrames();
+            String path = saveBitmap(result);
+
+            if (path != null) {
+                updateNotification("已保存: " + path);
+                Log.d(TAG, "Saved to: " + path);
+
+                // 通知悬浮窗关闭
+                Intent intent = new Intent(FloatingWindowService.ACTION_HIDE);
+                sendBroadcast(intent);
+            } else {
+                updateNotification("保存失败");
+            }
+            stopSelf();
+        }, 300);
     }
 
     // ===================== 帧去重拼接 =====================
@@ -271,8 +291,6 @@ public class ScreenshotService extends Service {
         return similar > (w / step) * 0.7;
     }
 
-    // ===================== 保存 =====================
-
     private String saveBitmap(Bitmap bitmap) {
         if (bitmap == null) return null;
         try {
@@ -291,19 +309,21 @@ public class ScreenshotService extends Service {
         }
     }
 
-    private void updateFloatingWindow() {
+    // ===================== 通知悬浮窗更新 =====================
+
+    private void notifyFloatingWindow() {
         int totalHeight = 0;
         for (Bitmap f : frames) totalHeight += f.getHeight();
         int sizeKB = (int) (totalHeight * screenWidth * 4L / 1024);
 
         Intent intent = new Intent(FloatingWindowService.ACTION_UPDATE);
         intent.putExtra("height", totalHeight);
-        intent.putExtra("size",   sizeKB);
+        intent.putExtra("size", sizeKB);
         intent.putExtra("frames", frames.size());
         sendBroadcast(intent);
     }
 
-    // ===================== 通知 =====================
+    // ===================== 通知栏 =====================
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -334,7 +354,7 @@ public class ScreenshotService extends Service {
     // ===================== 清理 =====================
 
     private void cleanup() {
-        isRunning = false;
+        isProjectionReady = false;
         if (virtualDisplay  != null) { virtualDisplay.release();  virtualDisplay = null; }
         if (imageReader    != null) { imageReader.close();        imageReader   = null; }
         if (mediaProjection != null) { mediaProjection.stop();    mediaProjection = null; }
@@ -342,6 +362,14 @@ public class ScreenshotService extends Service {
             if (!f.isRecycled()) f.recycle();
         }
         frames.clear();
+    }
+
+    @Override
+    public void onDestroy() {
+        cleanup();
+        if (handlerThread != null) handlerThread.quitSafely();
+        ProjectionHolder.clear();
+        super.onDestroy();
     }
 
     @Nullable

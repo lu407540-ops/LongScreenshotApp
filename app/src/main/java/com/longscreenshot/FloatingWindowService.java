@@ -22,8 +22,8 @@ import androidx.annotation.Nullable;
 public class FloatingWindowService extends Service {
 
     private static final String TAG = "FloatingWindowService";
-    public static final String ACTION_SHOW = "ACTION_SHOW";
-    public static final String ACTION_HIDE = "ACTION_HIDE";
+    public static final String ACTION_SHOW   = "ACTION_SHOW";
+    public static final String ACTION_HIDE   = "ACTION_HIDE";
     public static final String ACTION_UPDATE = "ACTION_UPDATE";
 
     private WindowManager wm;
@@ -31,7 +31,7 @@ public class FloatingWindowService extends Service {
     private WindowManager.LayoutParams params;
 
     private LinearLayout layoutStandby, layoutCapturing;
-    private Button btnStart, btnCapture, btnSave;
+    private Button btnCapture, btnSave;
     private TextView tvStatusText, tvHeight, tvSize, tvFrames;
 
     private boolean isShowing = false;
@@ -92,9 +92,10 @@ public class FloatingWindowService extends Service {
             floatingView = null;
         }
         if (updateReceiver != null) {
-            unregisterReceiver(updateReceiver);
+            try { unregisterReceiver(updateReceiver); } catch (Exception ignored) {}
             updateReceiver = null;
         }
+        stopSelf();
         Log.d(TAG, "Floating window hidden");
     }
 
@@ -103,13 +104,19 @@ public class FloatingWindowService extends Service {
 
         layoutStandby  = floatingView.findViewById(R.id.layoutStandby);
         layoutCapturing = floatingView.findViewById(R.id.layoutCapturing);
-        btnStart     = floatingView.findViewById(R.id.btnStart);
+        Button btnStart   = floatingView.findViewById(R.id.btnStart);
         btnCapture   = floatingView.findViewById(R.id.btnCapture);
         btnSave      = floatingView.findViewById(R.id.btnSave);
         tvStatusText = floatingView.findViewById(R.id.tvStatusText);
         tvHeight     = floatingView.findViewById(R.id.tvHeight);
         tvSize       = floatingView.findViewById(R.id.tvSize);
         tvFrames     = floatingView.findViewById(R.id.tvFrames);
+
+        // MediaProjection 已就绪，直接进入截图模式
+        if (layoutStandby != null)  layoutStandby.setVisibility(View.GONE);
+        if (layoutCapturing != null) layoutCapturing.setVisibility(View.VISIBLE);
+        if (tvStatusText != null)   tvStatusText.setText("就绪 - 滚动后点击截取");
+        if (btnStart != null)       btnStart.setVisibility(View.GONE);
 
         // 拖拽区域 = 整个悬浮窗
         View dragArea = floatingView.findViewById(R.id.floatingLayout);
@@ -136,33 +143,36 @@ public class FloatingWindowService extends Service {
             });
         }
 
-        // 「▶ 开始」按钮：切换到截图模式，启动截图服务
-        btnStart.setOnClickListener(v -> {
-            Log.d(TAG, "Start clicked");
-            layoutStandby.setVisibility(View.GONE);
-            layoutCapturing.setVisibility(View.VISIBLE);
-            tvStatusText.setText("截图中...");
-            startService(new Intent(this, ScreenshotService.class)
-                    .setAction(ScreenshotService.ACTION_START));
-        });
+        // 「截取」按钮
+        if (btnCapture != null) {
+            btnCapture.setOnClickListener(v -> {
+                Log.d(TAG, "Capture clicked");
+                if (tvStatusText != null) tvStatusText.setText("截取中...");
+                // 用 startForegroundService 确保前台服务能收到
+                Intent intent = new Intent(this, ScreenshotService.class);
+                intent.setAction(ScreenshotService.ACTION_CAPTURE);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent);
+                } else {
+                    startService(intent);
+                }
+            });
+        }
 
-        // 「截取」按钮：通知截图服务截取当前帧
-        btnCapture.setOnClickListener(v -> {
-            Log.d(TAG, "Capture clicked");
-            tvStatusText.setText("截取中...");
-            startService(new Intent(this, ScreenshotService.class)
-                    .setAction(ScreenshotService.ACTION_CAPTURE));
-        });
-
-        // 「保存」按钮：停止并保存
-        btnSave.setOnClickListener(v -> {
-            Log.d(TAG, "Save clicked");
-            tvStatusText.setText("正在保存...");
-            startService(new Intent(this, ScreenshotService.class)
-                    .setAction(ScreenshotService.ACTION_STOP));
-            // 延迟关闭悬浮窗，等保存完成
-            new android.os.Handler().postDelayed(() -> hideFloatingWindow(), 1500);
-        });
+        // 「保存」按钮
+        if (btnSave != null) {
+            btnSave.setOnClickListener(v -> {
+                Log.d(TAG, "Save clicked");
+                if (tvStatusText != null) tvStatusText.setText("正在保存...");
+                Intent intent = new Intent(this, ScreenshotService.class);
+                intent.setAction(ScreenshotService.ACTION_STOP);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent);
+                } else {
+                    startService(intent);
+                }
+            });
+        }
     }
 
     private void registerUpdateReceiver() {
@@ -176,20 +186,48 @@ public class FloatingWindowService extends Service {
                 if (tvHeight != null)  tvHeight.setText("高度: " + height + " px");
                 if (tvSize != null)    tvSize.setText("大小: " + size + " KB");
                 if (tvFrames != null)  tvFrames.setText("帧数: " + fCount);
-                if (tvStatusText != null) tvStatusText.setText("截图成功");
+                if (tvStatusText != null) tvStatusText.setText("已截 " + fCount + " 帧");
             }
         };
+
         IntentFilter filter = new IntentFilter(ACTION_UPDATE);
+
+        // 同时监听 ScreenshotService 发来的 ACTION_HIDE 广播
+        IntentFilter hideFilter = new IntentFilter(ACTION_HIDE);
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(updateReceiver, filter, Context.RECEIVER_EXPORTED);
+            registerReceiver(hideReceiver, hideFilter, Context.RECEIVER_EXPORTED);
         } else {
             registerReceiver(updateReceiver, filter);
+            registerReceiver(hideReceiver, hideFilter);
         }
     }
 
+    // 监听保存完成后的关闭指令
+    private BroadcastReceiver hideReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (ACTION_HIDE.equals(intent.getAction())) {
+                hideFloatingWindow();
+            }
+        }
+    };
+
     @Override
     public void onDestroy() {
-        hideFloatingWindow();
+        isShowing = false;
+        if (floatingView != null) {
+            try { wm.removeView(floatingView); } catch (Exception ignored) {}
+            floatingView = null;
+        }
+        if (updateReceiver != null) {
+            try { unregisterReceiver(updateReceiver); } catch (Exception ignored) {}
+            updateReceiver = null;
+        }
+        if (hideReceiver != null) {
+            try { unregisterReceiver(hideReceiver); } catch (Exception ignored) {}
+        }
         super.onDestroy();
     }
 

@@ -46,18 +46,21 @@ public class MainActivity extends Activity {
             tvStatus.setText("授权成功，正在启动...");
             btnAction.setEnabled(false);
 
-            // 启动截图服务（_service 自己从 ProjectionHolder 读数据）
+            // 1. 先启动截图服务并立即创建 MediaProjection
             Intent ssIntent = new Intent(this, ScreenshotService.class);
             ssIntent.setAction(ScreenshotService.ACTION_START);
             startForegroundService(ssIntent);
 
-            // 显示悬浮窗
-            Intent fwIntent = new Intent(this, FloatingWindowService.class);
-            fwIntent.setAction(FloatingWindowService.ACTION_SHOW);
-            startService(fwIntent);
+            // 2. 稍等一下再显示悬浮窗，确保 ScreenshotService 已完成初始化
+            new android.os.Handler().postDelayed(() -> {
+                // 显示悬浮窗（直接进入截图模式）
+                Intent fwIntent = new Intent(this, FloatingWindowService.class);
+                fwIntent.setAction(FloatingWindowService.ACTION_SHOW);
+                startService(fwIntent);
 
-            // 延迟关闭 Activity，确保 Service 已启动
-            findViewById(android.R.id.content).postDelayed(() -> finish(), 1500);
+                // 再延迟关闭 Activity
+                new android.os.Handler().postDelayed(() -> finish(), 800);
+            }, 500);
         } else {
             tvStatus.setText("授权被拒绝，无法使用");
             btnAction.setText("重新授权");
