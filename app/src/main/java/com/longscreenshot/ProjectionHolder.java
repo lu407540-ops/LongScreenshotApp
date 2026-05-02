@@ -3,6 +3,7 @@ package com.longscreenshot;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 
 /**
  * 持久化存储 MediaProjection 授权数据。
@@ -24,7 +25,7 @@ public class ProjectionHolder {
         sData = data;
         sLoaded = true;
 
-        String uri = data.toUri(Intent.URI_ALLOW_UNDEFINED);
+        String uri = data.toUri(Intent.URI_INTENT_SCHEME);
         SharedPreferences sp = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
         sp.edit()
                 .putInt(KEY_RESULT_CODE, rc)
@@ -43,7 +44,7 @@ public class ProjectionHolder {
         if (rc != -1 && uri != null) {
             try {
                 sResultCode = rc;
-                sData = Intent.parseUri(uri, Intent.URI_ALLOW_UNDEFINED);
+                sData = Intent.parseUri(uri, Intent.URI_INTENT_SCHEME);
                 sLoaded = true;
             } catch (Exception e) {
                 sResultCode = -1;
