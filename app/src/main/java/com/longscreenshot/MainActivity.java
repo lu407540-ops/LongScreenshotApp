@@ -24,19 +24,8 @@ public class MainActivity extends Activity {
 
         btnAction.setOnClickListener(v -> requestPermission());
 
-        // 检查是否已有授权缓存
-        if (hasSavedPermission()) {
-            tvStatus.setText("已授权，正在启动...");
-            startServicesWithSavedPermission();
-        } else {
-            tvStatus.setText("需要屏幕录制授权");
-            btnAction.setText("授予权限");
-        }
-    }
-
-    private boolean hasSavedPermission() {
-        return getSharedPreferences(ScreenshotService.PREFS_NAME, MODE_PRIVATE)
-                .getBoolean("granted", false);
+        tvStatus.setText("需要屏幕录制授权");
+        btnAction.setText("授予权限并启动");
     }
 
     private void requestPermission() {
@@ -51,44 +40,27 @@ public class MainActivity extends Activity {
         if (requestCode != REQUEST_CODE_SCREEN_CAPTURE) return;
 
         if (resultCode == Activity.RESULT_OK && data != null) {
-            // 保存授权信息
-            getSharedPreferences(ScreenshotService.PREFS_NAME, MODE_PRIVATE)
-                    .edit()
-                    .putInt(ScreenshotService.KEY_RESULT_CODE, resultCode)
-                    .putBoolean("granted", true)
-                    .apply();
+            // 用静态变量传递，避免 IBinder 序列化失效
+            ProjectionHolder.set(resultCode, data);
 
-            // 启动服务并传递 data Intent
-            startServices(resultCode, data);
-            finish(); // 关闭 Activity，悬浮窗接管
+            tvStatus.setText("授权成功，正在启动...");
+            btnAction.setEnabled(false);
+
+            // 启动截图服务（_service 自己从 ProjectionHolder 读数据）
+            Intent ssIntent = new Intent(this, ScreenshotService.class);
+            ssIntent.setAction(ScreenshotService.ACTION_START);
+            startForegroundService(ssIntent);
+
+            // 显示悬浮窗
+            Intent fwIntent = new Intent(this, FloatingWindowService.class);
+            fwIntent.setAction(FloatingWindowService.ACTION_SHOW);
+            startService(fwIntent);
+
+            // 延迟关闭 Activity，确保 Service 已启动
+            findViewById(android.R.id.content).postDelayed(() -> finish(), 1500);
         } else {
             tvStatus.setText("授权被拒绝，无法使用");
             btnAction.setText("重新授权");
         }
-    }
-
-    /** 有缓存授权时：用保存的 resultCode + 重新构建的 Intent 启动 */
-    private void startServicesWithSavedPermission() {
-        int resultCode = getSharedPreferences(ScreenshotService.PREFS_NAME, MODE_PRIVATE)
-                .getInt(ScreenshotService.KEY_RESULT_CODE, Activity.RESULT_OK);
-        // 重新请求一次权限以获取有效的 data Intent
-        requestPermission();
-    }
-
-    /** 首次授权：用真实的 data Intent 启动服务 */
-    private void startServices(int resultCode, Intent data) {
-        android.util.Log.d("MainActivity", "Starting services with permission");
-
-        // 启动 ScreenshotService，传递 data
-        Intent ssIntent = new Intent(this, ScreenshotService.class);
-        ssIntent.setAction(ScreenshotService.ACTION_START);
-        ssIntent.putExtra("resultCode", resultCode);
-        ssIntent.putExtra("data", data);
-        startForegroundService(ssIntent);
-
-        // 显示悬浮窗
-        Intent fwIntent = new Intent(this, FloatingWindowService.class);
-        fwIntent.setAction(FloatingWindowService.ACTION_SHOW);
-        startService(fwIntent);
     }
 }

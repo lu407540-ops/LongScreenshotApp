@@ -36,12 +36,9 @@ import java.util.List;
 public class ScreenshotService extends Service {
 
     private static final String TAG = "ScreenshotService";
-    public static final String ACTION_START  = "ACTION_START";
-    public static final String ACTION_STOP   = "ACTION_STOP";
+    public static final String ACTION_START   = "ACTION_START";
+    public static final String ACTION_STOP    = "ACTION_STOP";
     public static final String ACTION_CAPTURE = "ACTION_CAPTURE";
-
-    public static final String PREFS_NAME     = "LongScreenshotPrefs";
-    public static final String KEY_RESULT_CODE = "result_code";
 
     private static final String NOTIFICATION_CHANNEL_ID = "screenshot_channel";
     private static final int NOTIFICATION_ID = 1002;
@@ -56,10 +53,6 @@ public class ScreenshotService extends Service {
     private List<Bitmap> frames = new ArrayList<>();
     private boolean isRunning = false;
 
-    // 权限数据（从 MainActivity 通过 Intent 传递）
-    private int cachedResultCode = -1;
-    private Intent cachedData = null;
-
     // 去重参数
     private static final int MATCH_THRESHOLD = 30;
     private static final float OVERLAP_SEARCH_RATIO = 0.5f;
@@ -69,6 +62,10 @@ public class ScreenshotService extends Service {
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
+
+        // 立即启动前台通知，满足 Android 8.0 5秒限制
+        startForeground(NOTIFICATION_ID, buildNotification("正在准备..."));
+
         handlerThread = new HandlerThread("ScreenshotThread");
         handlerThread.start();
         handler = new Handler(handlerThread.getLooper());
@@ -76,7 +73,7 @@ public class ScreenshotService extends Service {
         WindowManager wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
         DisplayMetrics metrics = new DisplayMetrics();
         wm.getDefaultDisplay().getRealMetrics(metrics);
-        screenWidth = metrics.widthPixels;
+        screenWidth  = metrics.widthPixels;
         screenHeight = metrics.heightPixels;
         screenDensity = metrics.densityDpi;
         Log.d(TAG, "Screen: " + screenWidth + "x" + screenHeight);
@@ -87,19 +84,8 @@ public class ScreenshotService extends Service {
         if (intent == null) return START_STICKY;
 
         String action = intent.getAction();
-
-        // 接收权限数据（首次授权时由 MainActivity 传入）
-        if (intent.hasExtra("resultCode") && intent.hasExtra("data")) {
-            cachedResultCode = intent.getIntExtra("resultCode", -1);
-            cachedData = intent.getParcelableExtra("data");
-            // 持久化 resultCode（data 无法持久化，每次需重新授权）
-            getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                    .edit()
-                    .putInt(KEY_RESULT_CODE, cachedResultCode)
-                    .apply();
-        }
-
         Log.d(TAG, "onStartCommand: " + action);
+
         if (ACTION_START.equals(action)) {
             startProjection();
         } else if (ACTION_CAPTURE.equals(action)) {
@@ -114,18 +100,24 @@ public class ScreenshotService extends Service {
 
     private void startProjection() {
         if (isRunning) return;
-        if (cachedResultCode == -1) {
-            Log.e(TAG, "No valid screen capture permission");
+
+        // 从 ProjectionHolder 读取授权数据
+        if (ProjectionHolder.resultCode == -1 || ProjectionHolder.data == null) {
+            Log.e(TAG, "No valid permission data in ProjectionHolder");
             return;
         }
 
         try {
             MediaProjectionManager manager =
                     (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-            mediaProjection = manager.getMediaProjection(cachedResultCode, cachedData);
+            mediaProjection = manager.getMediaProjection(
+                    ProjectionHolder.resultCode, ProjectionHolder.data);
 
-            imageReader = ImageReader.newInstance(screenWidth, screenHeight,
-                    PixelFormat.RGBA_8888, 2);
+            // 用完后清空静态数据，避免内存泄漏
+            ProjectionHolder.clear();
+
+            imageReader = ImageReader.newInstance(
+                    screenWidth, screenHeight, PixelFormat.RGBA_8888, 2);
 
             virtualDisplay = mediaProjection.createVirtualDisplay(
                     "LongScreenshot",
@@ -135,10 +127,11 @@ public class ScreenshotService extends Service {
 
             isRunning = true;
             frames.clear();
-            startForeground(NOTIFICATION_ID, buildNotification("长截图服务运行中，点击悬浮窗截图"));
+            updateNotification("长截图运行中，点击悬浮窗截图");
             Log.d(TAG, "Projection started");
         } catch (Exception e) {
             Log.e(TAG, "Failed to start projection", e);
+            updateNotification("启动失败：" + e.getMessage());
         }
     }
 
@@ -157,6 +150,7 @@ public class ScreenshotService extends Service {
     public void onDestroy() {
         cleanup();
         if (handlerThread != null) handlerThread.quitSafely();
+        ProjectionHolder.clear();
         super.onDestroy();
     }
 
@@ -189,8 +183,8 @@ public class ScreenshotService extends Service {
             Image.Plane[] planes = image.getPlanes();
             ByteBuffer buffer = planes[0].getBuffer();
             int pixelStride = planes[0].getPixelStride();
-            int rowStride = planes[0].getRowStride();
-            int rowPadding = rowStride - pixelStride * screenWidth;
+            int rowStride   = planes[0].getRowStride();
+            int rowPadding   = rowStride - pixelStride * screenWidth;
 
             Bitmap bitmap = Bitmap.createBitmap(
                     screenWidth + rowPadding / pixelStride,
@@ -219,7 +213,8 @@ public class ScreenshotService extends Service {
             Bitmap current = frames.get(i);
             int overlap = findOverlap(prev, current);
             if (overlap > 0) {
-                Bitmap cropped = Bitmap.createBitmap(current, 0, overlap,
+                Bitmap cropped = Bitmap.createBitmap(
+                        current, 0, overlap,
                         current.getWidth(), current.getHeight() - overlap);
                 uniqueFrames.add(cropped);
                 totalH += cropped.getHeight();
@@ -230,14 +225,16 @@ public class ScreenshotService extends Service {
             prev = current;
         }
 
-        Bitmap result = Bitmap.createBitmap(screenWidth, totalH, Bitmap.Config.ARGB_8888);
+        Bitmap result = Bitmap.createBitmap(
+                screenWidth, totalH, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(result);
         int y = 0;
         for (Bitmap b : uniqueFrames) {
             canvas.drawBitmap(b, 0, y, null);
             y += b.getHeight();
         }
-        Log.d(TAG, "Stitched: " + frames.size() + " frames -> " + screenWidth + "x" + totalH);
+        Log.d(TAG, "Stitched: " + frames.size()
+                + " frames -> " + screenWidth + "x" + totalH);
         return result;
     }
 
@@ -266,9 +263,9 @@ public class ScreenshotService extends Service {
         for (int x = 0; x < w; x += step) {
             int c1 = b1.getPixel(x, y1);
             int c2 = b2.getPixel(x, y2);
-            int dr = Math.abs(Color.red(c1) - Color.red(c2));
+            int dr = Math.abs(Color.red(c1)   - Color.red(c2));
             int dg = Math.abs(Color.green(c1) - Color.green(c2));
-            int db = Math.abs(Color.blue(c1) - Color.blue(c2));
+            int db = Math.abs(Color.blue(c1)  - Color.blue(c2));
             if (dr + dg + db < MATCH_THRESHOLD) similar++;
         }
         return similar > (w / step) * 0.7;
@@ -281,7 +278,8 @@ public class ScreenshotService extends Service {
         try {
             File dir = new File(getExternalFilesDir(null), "LongScreenshot");
             if (!dir.exists()) dir.mkdirs();
-            File file = new File(dir, "long_screenshot_" + System.currentTimeMillis() + ".png");
+            File file = new File(dir,
+                    "long_screenshot_" + System.currentTimeMillis() + ".png");
             FileOutputStream fos = new FileOutputStream(file);
             bitmap.compress(CompressFormat.PNG, 100, fos);
             fos.flush();
@@ -300,7 +298,7 @@ public class ScreenshotService extends Service {
 
         Intent intent = new Intent(FloatingWindowService.ACTION_UPDATE);
         intent.putExtra("height", totalHeight);
-        intent.putExtra("size", sizeKB);
+        intent.putExtra("size",   sizeKB);
         intent.putExtra("frames", frames.size());
         sendBroadcast(intent);
     }
@@ -327,13 +325,19 @@ public class ScreenshotService extends Service {
                 .build();
     }
 
+    private void updateNotification(String text) {
+        NotificationManager nm = (NotificationManager)
+                getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) nm.notify(NOTIFICATION_ID, buildNotification(text));
+    }
+
     // ===================== 清理 =====================
 
     private void cleanup() {
         isRunning = false;
-        if (virtualDisplay != null) { virtualDisplay.release(); virtualDisplay = null; }
-        if (imageReader != null) { imageReader.close(); imageReader = null; }
-        if (mediaProjection != null) { mediaProjection.stop(); mediaProjection = null; }
+        if (virtualDisplay  != null) { virtualDisplay.release();  virtualDisplay = null; }
+        if (imageReader    != null) { imageReader.close();        imageReader   = null; }
+        if (mediaProjection != null) { mediaProjection.stop();    mediaProjection = null; }
         for (Bitmap f : frames) {
             if (!f.isRecycled()) f.recycle();
         }
